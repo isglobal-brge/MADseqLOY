@@ -1,0 +1,142 @@
+---
+title: "MADseqLOY: Detecting mosaic loss of chromosome Y events using sequencing data"
+subtitle: "Natàlia Carreras-Gallo and Juan R. Gonzalez"
+author: 
+  - name: Natàlia Carreras
+    email: natalia.carreras@isglobal.org
+    affiliation: Institute for Global Health (ISGlobal), Barcelona, Spain, Bioinformatics Research Group in Epidemiolgy     (BRGE)(http://brge.isglobal.org)
+  - name: Juan R González
+    email: juanr.gonzalez@isglobal.org
+    affiliation: Institute for Global Health (ISGlobal), Barcelona, Spain, Bioinformatics Research Group in Epidemiolgy     (BRGE)(http://brge.isglobal.org)
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+package: "`r paste('MADseqLOY', packageVersion('MADseqLOY'))`"
+output:    
+  BiocStyle::html_document:
+    number_sections: true
+    toc: yes
+    fig_caption: yes
+    fig_height: 4.5
+    fig_width: 6
+vignette: >
+  %\VignetteIndexEntry{`MADseqLOY`: Detecting mosaic loss of chromosome Y events (LOY) on NGS data}
+  %\VignetteEngine{knitr::rmarkdown}
+  \usepackage[utf8]{inputenc}
+bibliography: madseqloy.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+`MADseqLOY` is a package to detect mosaic loss of chromosome Y (LOY) events from next-generation sequencing (NGS) data. This vignette illustrates how to obtain coverage in the male-specific region of chromosome Y (MSY) of a set of samples, compared with the coverage in a reference region (all the autosomes by default). To estimate mosaic LOY, it uses the ratio between chromosome Y coverage and reference coverage (known as Y/ref hereinafter). As implemented in @gonzalezMADloy, we have not used the 56-Mb region between PAR1 and PAR2 because it includes the XTR that is shared between X and Y chromosomes. Thus, the coverage is calculated within the region chrY:6611498-24510581; hg19/GRCh37. With this package, we provide a method to establish whether an individual is carrying and alteration in chromosome Y or not (LOY/normal/GOY). 
+
+
+# Getting started
+
+You can install `MADseqLOY` from Github by typing 
+
+```{r install_madloy, eval=FALSE}
+devtools::install_github("isglobal-brge/MADseqLOY")
+```
+
+Then the package is loaded as usual
+
+```{r, message = FALSE}
+library(MADseqLOY)
+```
+
+We have prepared a set of data files including XX reported males and XX females to be used as an illustrative example about how to get the Y/ref of each sample. Files and data have been anonymized and belong to individuals from general population. These files can be downloaded from this link XX.
+
+The zipped file includes one file per sample in BAM format to be processed with `MADseqLOY` package. 
+
+In order to reproduce this vignette, decompress the .zip file in a folder and set this folder path in an R object (for instance `rawDataPath`). 
+
+```{r, get_data_path}
+rawDataPath <- "C:/ncarreras/MADseqLOY/vignette/rawData"
+rawDataPath
+files <- dir(rawDataPath)
+```
+
+# Processing NGS data with `madseqloy`: loading and estimating Y/ref ratio
+
+## Required input data
+
+The function `madseqloy` processes individual NGS data in BAM format. 
+
+## Filtering female samples
+
+LOY association studies are performed only using male samples. Obviously, clinical data can be used to filter such individuals. However, in some occasions there are errors in those databases that can be detected by using sequencing data. The function `checkSex` can be used to further verify that there are no female samples in our data comparing X and Y coverages (females: XX, males: XY). Let us perform this filtering using the test data. 
+
+```{r, check_sex}
+sex <- checkSex(rawDataPath)
+```
+
+This function only requires the path containing the raw data in BAM format. Notice that this function speed up the process by changing the argument `mc.cores`.
+
+The function `checkSex` returns an object that can be plotted by using the generic function `plot`. The figure depicts the coverage in both X and Y chromosomes. We strongly recommend to create this plot to be sure that the filtering is correctly done.  
+
+```{r, plot_sex}
+plot(sex)
+```
+
+The female samples can be identified by typing
+
+```{r, sample_females}
+sex$par$files[sex$class=="FEMALE"]
+```
+
+as we can observe, the XX reported female samples are classified as "FEMALE", Nevertheless, we also detect some discrepancies in other XX samples that were reported as "MALE" while their genetic data indicates the opposite. Those samples are removed from downstream analysis since this is a normal QC step in genetic studies:
+
+```{r, remove_females}
+files.males <- sex$par$files[sex$class!="FEMALE"]
+```
+
+## Get Y/ref ratio
+
+`madseqloy` function processes raw data and provides the Y/ref ratio of each sample. The Y/ref estimation consists on different steps:
+
+1. Import bins from the reference genome with fixed size (`binsize` argument).
+2. Count reads per bin.
+3. Filter reads with high number of uncharacterised bases (`n.bases.min`), low mappability (`mappability.min`) and overlapped with blacklisted regions (`blacklist.max`).
+4. Correct read counts by GC content and mappability (`correction` parameter) with LOESS.
+5. Normalize read counts (`normalization`) by median or mean.
+6. Calculate the coverage from the Y chromosome and from the reference chromosomes (all autosomes by default) by calculating the mean of the read counts in the region.
+7. Estimate the ratio Y/ref.
+
+The steps 3, 4, and 5 can be avoided by changing the corresponding parameters but we highly recommend to consider all the steps to obtain more reliable results. 
+
+The `madseqloy` function only requires the path where those files are located. Let us illustrate how to get Y/ref ratio of our illustrative example. NOTE: if `checkSex` is not executed, `files.males` should be replaced by `rawDataPath`
+
+```{r, madloy_example}
+ex <- madseqloy(files.males)
+```
+
+The function creates an object of class `MADseqLOY` that can be inspected by using the generic `print` function.
+
+```{r, madloy_example_print}
+ex
+```
+
+We observe that coverage has been summarized in a target and a reference region. By default the target region corresponds to chrY:6611498-24510581 (hg19/GRCh3) and the reference region corresponds to autosomal chromosomes. The arguments `target.region` and `ref.region` can be used to change those values. This information has to be passed in UCSC format (e.g. "chr21" or "chr21:1000-10000"). By default the human genome reference is `hg19` that can be changed in the argument `genome`. 
+The coverages are calculated using the trimmed-mean. For the target region, the argument `trim.target` of the `madseqloy` function controls the fraction of bins from the region that are removed before the mean is computed (0 to 0.5). This is a robust estimation of the coverage in a given region since it takes into account possible regions in the genome having CNV alterations. Since we have used a very specific region from the Y chromosome, it is 0 by default. However, the estimation of the reference coverage is also summarized using the trimmed-mean (`trim.ref`) and, in this case, it is set to 0.25 by default. This parameter is recommended to be increased, for instance, when analyzing cancer data where a large number of alterations are expected.
+
+## Quality control
+
+Samples with bad quality, that is, having large variability in the reference coverage are recommended to do not be included in the analysis. `madseqloy` function returns NA values of Y/ref ratio for those samples having standard deviation larger than 2 times the mean standard deviation (estimated using all the samples) in the reference chromosome.
+
+```{r qc}
+ex$par$files[ex$par$QCremoved]
+```
+
+# Visualizing summarized Y/ref data in a set of samples
+
+Data can be visually inspected by using the generic `plot` function. This function depicts the ratio between the Y coverage and the reference coverage. 
+
+```{r, fig.show='hold',  fig.cap = "Plot of MADseqloy object of EGCUT males samples"}
+plot(ex, print.labels=TRUE, threshold=-0.3)
+```
+
+
+This figure shows XX samples that could have a LOY event (those in the XX range of Y-axis). Visual inspection of the Y/ref ratio can be used to verify whether they are real LOY rearrangements as we are describing in the next section. 
